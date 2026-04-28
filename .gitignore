@@ -1,5 +1,6 @@
 docs/claude-relay-service/
 .codex
+.runtime/
 
 # ===================
 # Go 后端
