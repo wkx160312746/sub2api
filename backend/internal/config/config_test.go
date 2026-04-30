@@ -160,6 +160,23 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	}
 }
 
+func TestLoadOpenAIImagesOmitReasoningDefault(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.OpenAIImagesOmitReasoning)
+}
+
+func TestLoadOpenAIImagesOmitReasoningFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_IMAGES_OMIT_REASONING", "true")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.OpenAIImagesOmitReasoning)
+}
+
 func TestLoadOpenAIWSStickyTTLCompatibility(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_WS_STICKY_RESPONSE_ID_TTL_SECONDS", "0")

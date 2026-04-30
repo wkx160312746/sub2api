@@ -28,6 +28,10 @@ type openAIResponsesImageResult struct {
 	Model         string
 }
 
+type openAIImagesResponsesRequestOptions struct {
+	OmitReasoning bool
+}
+
 func openAIResponsesImageResultKey(itemID string, result openAIResponsesImageResult) string {
 	if strings.TrimSpace(result.Result) != "" {
 		return strings.TrimSpace(result.OutputFormat) + "|" + strings.TrimSpace(result.Result)
@@ -201,6 +205,10 @@ func openAIImageUploadToDataURL(upload OpenAIImagesUpload) (string, error) {
 }
 
 func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel string) ([]byte, error) {
+	return buildOpenAIImagesResponsesRequestWithOptions(parsed, toolModel, openAIImagesResponsesRequestOptions{})
+}
+
+func buildOpenAIImagesResponsesRequestWithOptions(parsed *OpenAIImagesRequest, toolModel string, opts openAIImagesResponsesRequestOptions) ([]byte, error) {
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
@@ -227,6 +235,10 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	}
 
 	req := []byte(`{"instructions":"","stream":true,"reasoning":{"effort":"medium","summary":"auto"},"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"model":"","store":false,"tool_choice":{"type":"image_generation"}}`)
+	if opts.OmitReasoning {
+		req, _ = sjson.DeleteBytes(req, "reasoning")
+		req, _ = sjson.DeleteBytes(req, "include")
+	}
 	req, _ = sjson.SetBytes(req, "model", openAIImagesResponsesMainModel)
 
 	input := []byte(`[{"type":"message","role":"user","content":[{"type":"input_text","text":""}]}]`)
@@ -757,7 +769,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 
-	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, requestModel)
+	responsesBody, err := buildOpenAIImagesResponsesRequestWithOptions(parsed, requestModel, openAIImagesResponsesRequestOptions{
+		OmitReasoning: s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIImagesOmitReasoning,
+	})
 	if err != nil {
 		return nil, err
 	}
