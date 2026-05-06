@@ -112,6 +112,30 @@ func RegisterGatewayRoutes(
 			}
 			h.OpenAIGateway.Images(c)
 		})
+		gateway.POST("/image-tasks", func(c *gin.Context) {
+			if getGroupPlatform(c) != service.PlatformOpenAI {
+				c.JSON(http.StatusNotFound, gin.H{
+					"error": gin.H{
+						"type":    "not_found_error",
+						"message": "Image tasks API is not supported for this platform",
+					},
+				})
+				return
+			}
+			h.OpenAIGateway.CreateImageTask(c)
+		})
+		gateway.GET("/image-tasks/:id", func(c *gin.Context) {
+			if getGroupPlatform(c) != service.PlatformOpenAI {
+				c.JSON(http.StatusNotFound, gin.H{
+					"error": gin.H{
+						"type":    "not_found_error",
+						"message": "Image tasks API is not supported for this platform",
+					},
+				})
+				return
+			}
+			h.OpenAIGateway.GetImageTask(c)
+		})
 	}
 
 	// Gemini 原生 API 兼容层（Gemini SDK/CLI 直连）
@@ -178,6 +202,30 @@ func RegisterGatewayRoutes(
 			return
 		}
 		h.OpenAIGateway.Images(c)
+	})
+	r.POST("/image-tasks", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, func(c *gin.Context) {
+		if getGroupPlatform(c) != service.PlatformOpenAI {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{
+					"type":    "not_found_error",
+					"message": "Image tasks API is not supported for this platform",
+				},
+			})
+			return
+		}
+		h.OpenAIGateway.CreateImageTask(c)
+	})
+	r.GET("/image-tasks/:id", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, func(c *gin.Context) {
+		if getGroupPlatform(c) != service.PlatformOpenAI {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{
+					"type":    "not_found_error",
+					"message": "Image tasks API is not supported for this platform",
+				},
+			})
+			return
+		}
+		h.OpenAIGateway.GetImageTask(c)
 	})
 
 	// Antigravity 模型列表

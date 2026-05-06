@@ -623,6 +623,9 @@ type GatewayConfig struct {
 	// OpenAIImagesOmitReasoning: OpenAI OAuth Images 兼容路径是否省略 reasoning/include。
 	// 开启后可减少 Codex /responses 图片工具调用的额外推理开销；默认关闭以保持兼容。
 	OpenAIImagesOmitReasoning bool `mapstructure:"openai_images_omit_reasoning"`
+	// ImageTaskResultDir: 异步图片任务结果落盘目录。
+	// 为空时使用 DATA_DIR/generated/images，DATA_DIR 为空则回退 /app/data/generated/images。
+	ImageTaskResultDir string `mapstructure:"image_task_result_dir"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
@@ -1654,6 +1657,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.force_codex_cli", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.openai_images_omit_reasoning", false)
+	viper.SetDefault("gateway.image_task_result_dir", "")
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)

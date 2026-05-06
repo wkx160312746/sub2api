@@ -3,11 +3,13 @@ package routes
 import (
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
 // RegisterCommonRoutes 注册通用路由（健康检查、状态等）
-func RegisterCommonRoutes(r *gin.Engine) {
+func RegisterCommonRoutes(r *gin.Engine, cfg *config.Config) {
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ok"})
@@ -29,4 +31,6 @@ func RegisterCommonRoutes(r *gin.Engine) {
 			},
 		})
 	})
+
+	r.StaticFS("/generated/images", gin.Dir(service.OpenAIImageTaskResultDir(cfg), false))
 }

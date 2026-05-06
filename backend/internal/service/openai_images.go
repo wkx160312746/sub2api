@@ -59,35 +59,48 @@ type OpenAIImagesUpload struct {
 }
 
 type OpenAIImagesRequest struct {
-	Endpoint           string
-	ContentType        string
-	Multipart          bool
-	Model              string
-	ExplicitModel      bool
-	Prompt             string
-	Stream             bool
-	N                  int
-	Size               string
-	ExplicitSize       bool
-	SizeTier           string
-	ResponseFormat     string
-	Quality            string
-	Background         string
-	OutputFormat       string
-	Moderation         string
-	InputFidelity      string
-	Style              string
-	OutputCompression  *int
-	PartialImages      *int
-	HasMask            bool
-	HasNativeOptions   bool
-	RequiredCapability OpenAIImagesCapability
-	InputImageURLs     []string
-	MaskImageURL       string
-	Uploads            []OpenAIImagesUpload
-	MaskUpload         *OpenAIImagesUpload
-	Body               []byte
-	bodyHash           string
+	Endpoint               string
+	ContentType            string
+	Multipart              bool
+	Model                  string
+	ExplicitModel          bool
+	Prompt                 string
+	Stream                 bool
+	N                      int
+	Size                   string
+	ExplicitSize           bool
+	SizeTier               string
+	ResponseFormat         string
+	Quality                string
+	ExplicitQuality        bool
+	Background             string
+	OutputFormat           string
+	Moderation             string
+	InputFidelity          string
+	Style                  string
+	OutputCompression      *int
+	PartialImages          *int
+	HasMask                bool
+	HasNativeOptions       bool
+	RequiredCapability     OpenAIImagesCapability
+	ImageTier              string
+	ExplicitImageTier      bool
+	ResolutionTier         string
+	ExplicitResolutionTier bool
+	AspectRatio            string
+	ExplicitAspectRatio    bool
+	TargetWidth            int
+	TargetHeight           int
+	UpstreamSize           string
+	NeedsPostprocess       bool
+	ModelAlias             string
+	ModelTierLocked        bool
+	InputImageURLs         []string
+	MaskImageURL           string
+	Uploads                []OpenAIImagesUpload
+	MaskUpload             *OpenAIImagesUpload
+	Body                   []byte
+	bodyHash               string
 }
 
 func (r *OpenAIImagesRequest) IsEdits() bool {
@@ -110,6 +123,21 @@ func (r *OpenAIImagesRequest) StickySessionSeed() string {
 		seed += "|body=" + r.bodyHash
 	}
 	return seed
+}
+
+func (r *OpenAIImagesRequest) UsesImage2Preprocess() bool {
+	if r == nil {
+		return false
+	}
+	if r.ModelTierLocked || r.ExplicitImageTier || r.ExplicitResolutionTier || r.ExplicitAspectRatio {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(r.ModelAlias)) {
+	case "image2", "gpt-2":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []byte) (*OpenAIImagesRequest, error) {
@@ -152,10 +180,15 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 	}
 
 	applyOpenAIImagesDefaults(req)
+	if err := applyOpenAIImagesResolution(req); err != nil {
+		return nil, err
+	}
 	if err := validateOpenAIImagesModel(req.Model); err != nil {
 		return nil, err
 	}
-	req.SizeTier = normalizeOpenAIImageSizeTier(req.Size)
+	if req.SizeTier == "" {
+		req.SizeTier = normalizeOpenAIImageSizeTier(req.Size)
+	}
 	req.RequiredCapability = classifyOpenAIImagesCapability(req)
 	return req, nil
 }
@@ -189,7 +222,22 @@ func parseOpenAIImagesJSONRequest(body []byte, req *OpenAIImagesRequest) error {
 		req.ExplicitSize = req.Size != ""
 	}
 	req.ResponseFormat = strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "response_format").String()))
-	req.Quality = strings.TrimSpace(gjson.GetBytes(body, "quality").String())
+	if qualityResult := gjson.GetBytes(body, "quality"); qualityResult.Exists() {
+		req.Quality = strings.TrimSpace(qualityResult.String())
+		req.ExplicitQuality = true
+	}
+	if imageTierResult := gjson.GetBytes(body, "image_tier"); imageTierResult.Exists() {
+		req.ImageTier = strings.TrimSpace(imageTierResult.String())
+		req.ExplicitImageTier = true
+	}
+	if resolutionTierResult := gjson.GetBytes(body, "resolution_tier"); resolutionTierResult.Exists() {
+		req.ResolutionTier = strings.TrimSpace(resolutionTierResult.String())
+		req.ExplicitResolutionTier = true
+	}
+	if aspectRatioResult := gjson.GetBytes(body, "aspect_ratio"); aspectRatioResult.Exists() {
+		req.AspectRatio = strings.TrimSpace(aspectRatioResult.String())
+		req.ExplicitAspectRatio = true
+	}
 	req.Background = strings.TrimSpace(gjson.GetBytes(body, "background").String())
 	req.OutputFormat = strings.TrimSpace(gjson.GetBytes(body, "output_format").String())
 	req.Moderation = strings.TrimSpace(gjson.GetBytes(body, "moderation").String())
@@ -330,7 +378,17 @@ func parseOpenAIImagesMultipartRequest(body []byte, contentType string, req *Ope
 			req.N = n
 		case "quality":
 			req.Quality = value
+			req.ExplicitQuality = true
 			req.HasNativeOptions = true
+		case "image_tier":
+			req.ImageTier = value
+			req.ExplicitImageTier = true
+		case "resolution_tier":
+			req.ResolutionTier = value
+			req.ExplicitResolutionTier = true
+		case "aspect_ratio":
+			req.AspectRatio = value
+			req.ExplicitAspectRatio = true
 		case "background":
 			req.Background = value
 			req.HasNativeOptions = true
@@ -386,9 +444,305 @@ func applyOpenAIImagesDefaults(req *OpenAIImagesRequest) {
 	}
 	if strings.TrimSpace(req.Model) != "" {
 		req.Model = strings.TrimSpace(req.Model)
-		return
+	} else {
+		req.Model = "gpt-image-2"
 	}
-	req.Model = "gpt-image-2"
+}
+
+type openAIImageResolutionSpec struct {
+	BaseModel        string
+	Tier             string
+	AspectRatio      string
+	TargetWidth      int
+	TargetHeight     int
+	UpstreamSize     string
+	NeedsPostprocess bool
+	ModelTierLocked  bool
+	ModelAlias       string
+}
+
+func applyOpenAIImagesResolution(req *OpenAIImagesRequest) error {
+	if req == nil {
+		return nil
+	}
+	spec, err := resolveOpenAIImageResolutionSpec(req)
+	if err != nil {
+		return err
+	}
+	image2Mode := req.ExplicitImageTier || req.ExplicitResolutionTier || req.ExplicitAspectRatio || spec.ModelTierLocked || isOpenAIImagesShortAlias(spec.ModelAlias)
+	if image2Mode && req.ExplicitQuality {
+		return fmt.Errorf("quality is controlled by the server and cannot be set by the client")
+	}
+	req.ModelAlias = spec.ModelAlias
+	req.ModelTierLocked = spec.ModelTierLocked
+	if spec.BaseModel != "" {
+		req.Model = spec.BaseModel
+	}
+	if image2Mode {
+		req.ImageTier = spec.Tier
+		req.AspectRatio = spec.AspectRatio
+		req.TargetWidth = spec.TargetWidth
+		req.TargetHeight = spec.TargetHeight
+		req.UpstreamSize = spec.UpstreamSize
+		req.NeedsPostprocess = spec.NeedsPostprocess
+		req.SizeTier = spec.Tier
+		req.Size = spec.UpstreamSize
+		req.ExplicitSize = req.ExplicitSize || spec.ModelTierLocked || req.ExplicitImageTier || req.ExplicitResolutionTier || req.ExplicitAspectRatio
+		req.Quality = "low"
+		req.HasNativeOptions = true
+	} else if req.SizeTier == "" {
+		req.SizeTier = normalizeOpenAIImageSizeTier(req.Size)
+	}
+	return nil
+}
+
+func isOpenAIImagesShortAlias(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "image2", "gpt-2":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveOpenAIImageResolutionSpec(req *OpenAIImagesRequest) (openAIImageResolutionSpec, error) {
+	modelAlias := strings.TrimSpace(req.Model)
+	baseModel, modelTier, locked, err := parseOpenAIImagesModelAlias(modelAlias)
+	if err != nil {
+		return openAIImageResolutionSpec{}, err
+	}
+	if locked && (req.ExplicitImageTier || req.ExplicitResolutionTier) {
+		return openAIImageResolutionSpec{}, fmt.Errorf("image_tier is not allowed when model contains a tier suffix")
+	}
+
+	tier := modelTier
+	if tier == "" {
+		var explicitTier string
+		if req.ExplicitImageTier {
+			explicitTier = req.ImageTier
+		} else if req.ExplicitResolutionTier {
+			explicitTier = req.ResolutionTier
+		}
+		if strings.TrimSpace(explicitTier) != "" {
+			normalized, err := normalizeOpenAIImageTier(explicitTier)
+			if err != nil {
+				return openAIImageResolutionSpec{}, err
+			}
+			tier = normalized
+		}
+	}
+	if tier == "" {
+		tier = normalizeOpenAIImageSizeTier(req.Size)
+	}
+	if tier == "" {
+		tier = "2K"
+	}
+
+	aspectRatio := "1:1"
+	if req.ExplicitAspectRatio || strings.TrimSpace(req.AspectRatio) != "" {
+		normalized, err := normalizeOpenAIImageAspectRatio(req.AspectRatio)
+		if err != nil {
+			return openAIImageResolutionSpec{}, err
+		}
+		aspectRatio = normalized
+	} else if w, h, ok := parseOpenAIImageSize(req.Size); ok {
+		if normalized, ok := openAIImageAspectRatioFromDimensions(w, h); ok {
+			aspectRatio = normalized
+		}
+	}
+
+	targetWidth, targetHeight, ok := openAIImageTargetDimensions(tier, aspectRatio)
+	if !ok {
+		return openAIImageResolutionSpec{}, fmt.Errorf("unsupported image_tier/aspect_ratio combination: %s %s", tier, aspectRatio)
+	}
+	upstreamSize := openAIImageUpstreamSize(tier, aspectRatio)
+	needsPostprocess := upstreamSize != fmt.Sprintf("%dx%d", targetWidth, targetHeight)
+
+	return openAIImageResolutionSpec{
+		BaseModel:        baseModel,
+		Tier:             tier,
+		AspectRatio:      aspectRatio,
+		TargetWidth:      targetWidth,
+		TargetHeight:     targetHeight,
+		UpstreamSize:     upstreamSize,
+		NeedsPostprocess: needsPostprocess,
+		ModelTierLocked:  locked,
+		ModelAlias:       modelAlias,
+	}, nil
+}
+
+func parseOpenAIImagesModelAlias(model string) (string, string, bool, error) {
+	trimmed := strings.TrimSpace(model)
+	if trimmed == "" {
+		trimmed = "gpt-image-2"
+	}
+	lower := strings.ToLower(trimmed)
+	switch lower {
+	case "image2", "gpt-2", "gpt-image-2":
+		return "gpt-image-2", "", false, nil
+	case "image2-1k":
+		return "gpt-image-2", "1K", true, nil
+	case "image2-2k":
+		return "gpt-image-2", "2K", true, nil
+	case "image2-4k":
+		return "gpt-image-2", "4K", true, nil
+	case "gpt-image-2-1k":
+		return "gpt-image-2", "1K", true, nil
+	case "gpt-image-2-2k":
+		return "gpt-image-2", "2K", true, nil
+	case "gpt-image-2-4k":
+		return "gpt-image-2", "4K", true, nil
+	default:
+		if strings.HasPrefix(lower, "image2-") || strings.HasPrefix(lower, "gpt-image-2-") {
+			return "", "", false, fmt.Errorf("unsupported image model alias: %s", trimmed)
+		}
+		return trimmed, "", false, nil
+	}
+}
+
+func normalizeOpenAIImageTier(value string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "1K":
+		return "1K", nil
+	case "2K":
+		return "2K", nil
+	case "4K":
+		return "4K", nil
+	default:
+		return "", fmt.Errorf("unsupported image_tier: %s", strings.TrimSpace(value))
+	}
+}
+
+func normalizeOpenAIImageAspectRatio(value string) (string, error) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.ReplaceAll(normalized, "：", ":")
+	normalized = strings.ReplaceAll(normalized, " ", "")
+	switch normalized {
+	case "", "1:1", "1x1", "1-1", "square":
+		return "1:1", nil
+	case "3:2", "3x2", "3-2":
+		return "3:2", nil
+	case "2:3", "2x3", "2-3":
+		return "2:3", nil
+	case "4:3", "4x3", "4-3":
+		return "4:3", nil
+	case "3:4", "3x4", "3-4":
+		return "3:4", nil
+	case "16:9", "16x9", "16-9", "widescreen":
+		return "16:9", nil
+	case "9:16", "9x16", "9-16", "portrait":
+		return "9:16", nil
+	case "21:9", "21x9", "21-9":
+		return "21:9", nil
+	case "9:21", "9x21", "9-21":
+		return "9:21", nil
+	default:
+		return "", fmt.Errorf("unsupported aspect_ratio: %s", strings.TrimSpace(value))
+	}
+}
+
+func openAIImageTargetDimensions(tier, aspectRatio string) (int, int, bool) {
+	matrix := map[string]map[string][2]int{
+		"1K": {
+			"1:1":  {1024, 1024},
+			"3:2":  {1536, 1024},
+			"2:3":  {1024, 1536},
+			"4:3":  {1280, 960},
+			"3:4":  {960, 1280},
+			"16:9": {1792, 1024},
+			"9:16": {1024, 1792},
+			"21:9": {1792, 768},
+			"9:21": {768, 1792},
+		},
+		"2K": {
+			"1:1":  {2048, 2048},
+			"3:2":  {2304, 1536},
+			"2:3":  {1536, 2304},
+			"4:3":  {2048, 1536},
+			"3:4":  {1536, 2048},
+			"16:9": {2560, 1440},
+			"9:16": {1440, 2560},
+			"21:9": {2240, 960},
+			"9:21": {960, 2240},
+		},
+		"4K": {
+			"1:1":  {2880, 2880},
+			"3:2":  {3840, 2560},
+			"2:3":  {2560, 3840},
+			"4:3":  {3008, 2256},
+			"3:4":  {2256, 3008},
+			"16:9": {3840, 2160},
+			"9:16": {2160, 3840},
+			"21:9": {3584, 1536},
+			"9:21": {1536, 3584},
+		},
+	}
+	ratios, ok := matrix[tier]
+	if !ok {
+		return 0, 0, false
+	}
+	dimensions, ok := ratios[aspectRatio]
+	if !ok {
+		return 0, 0, false
+	}
+	return dimensions[0], dimensions[1], true
+}
+
+func openAIImageUpstreamSize(tier, aspectRatio string) string {
+	if aspectRatio == "1:1" {
+		return "1024x1024"
+	}
+	switch aspectRatio {
+	case "2:3", "3:4":
+		return "1024x1536"
+	case "9:16", "9:21":
+		return "1024x1792"
+	case "21:9":
+		return "1792x1024"
+	default:
+		return "1792x1024"
+	}
+}
+
+func parseOpenAIImageSize(size string) (int, int, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || width <= 0 {
+		return 0, 0, false
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+func openAIImageAspectRatioFromDimensions(width, height int) (string, bool) {
+	switch {
+	case width == height:
+		return "1:1", true
+	case width*2 == height*3:
+		return "3:2", true
+	case width*3 == height*2:
+		return "2:3", true
+	case width*3 == height*4:
+		return "4:3", true
+	case width*4 == height*3:
+		return "3:4", true
+	case width*9 == height*16:
+		return "16:9", true
+	case width*16 == height*9:
+		return "9:16", true
+	case width*9 == height*21:
+		return "21:9", true
+	case width*21 == height*9:
+		return "9:21", true
+	default:
+		return "", false
+	}
 }
 
 func isOpenAIImageGenerationModel(model string) bool {
@@ -413,6 +767,8 @@ func normalizeOpenAIImagesEndpointPath(path string) string {
 		return openAIImagesGenerationsEndpoint
 	case strings.Contains(trimmed, "/images/edits"):
 		return openAIImagesEditsEndpoint
+	case strings.Contains(trimmed, "/image-tasks"):
+		return openAIImagesGenerationsEndpoint
 	default:
 		return ""
 	}
@@ -568,7 +924,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		parsed.Endpoint,
 		account.Type,
 	)
-	forwardBody, forwardContentType, err := rewriteOpenAIImagesModel(body, parsed.ContentType, upstreamModel)
+	forwardBody, forwardContentType, err := rewriteOpenAIImagesRequestBody(body, parsed.ContentType, upstreamModel, parsed)
 	if err != nil {
 		return nil, err
 	}
@@ -743,24 +1099,69 @@ func buildOpenAIImagesURL(base string, endpoint string) string {
 	return normalized + endpoint
 }
 
-func rewriteOpenAIImagesModel(body []byte, contentType string, model string) ([]byte, string, error) {
+func rewriteOpenAIImagesRequestBody(body []byte, contentType string, model string, parsed *OpenAIImagesRequest) ([]byte, string, error) {
 	model = strings.TrimSpace(model)
-	if model == "" {
+	if model == "" && parsed == nil {
 		return body, contentType, nil
 	}
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err == nil && strings.EqualFold(mediaType, "multipart/form-data") {
-		rewrittenBody, rewrittenType, rewriteErr := rewriteOpenAIImagesMultipartModel(body, contentType, model)
+		rewrittenBody, rewrittenType, rewriteErr := rewriteOpenAIImagesMultipartRequestBody(body, contentType, model, parsed)
 		return rewrittenBody, rewrittenType, rewriteErr
 	}
-	rewritten, err := sjson.SetBytes(body, "model", model)
-	if err != nil {
-		return nil, "", fmt.Errorf("rewrite image request model: %w", err)
+	return rewriteOpenAIImagesJSONRequestBody(body, contentType, model, parsed)
+}
+
+func rewriteOpenAIImagesJSONRequestBody(body []byte, contentType string, model string, parsed *OpenAIImagesRequest) ([]byte, string, error) {
+	rewritten := body
+	var err error
+	for _, path := range []string{"image_tier", "resolution_tier", "aspect_ratio"} {
+		rewritten, err = sjson.DeleteBytes(rewritten, path)
+		if err != nil {
+			return nil, "", fmt.Errorf("rewrite image request field %s: %w", path, err)
+		}
+	}
+	if model != "" {
+		rewritten, err = sjson.SetBytes(rewritten, "model", model)
+		if err != nil {
+			return nil, "", fmt.Errorf("rewrite image request model: %w", err)
+		}
+	}
+	if parsed != nil {
+		image2Mode := parsed.UsesImage2Preprocess()
+		if image2Mode {
+			size := strings.TrimSpace(parsed.UpstreamSize)
+			if size == "" {
+				size = strings.TrimSpace(parsed.Size)
+			}
+			if size != "" {
+				rewritten, err = sjson.SetBytes(rewritten, "size", size)
+				if err != nil {
+					return nil, "", fmt.Errorf("rewrite image request size: %w", err)
+				}
+			}
+			quality := strings.TrimSpace(parsed.Quality)
+			if quality == "" {
+				quality = "low"
+			}
+			rewritten, err = sjson.SetBytes(rewritten, "quality", quality)
+			if err != nil {
+				return nil, "", fmt.Errorf("rewrite image request quality: %w", err)
+			}
+		} else if parsed.ExplicitQuality {
+			quality := strings.TrimSpace(parsed.Quality)
+			if quality != "" {
+				rewritten, err = sjson.SetBytes(rewritten, "quality", quality)
+				if err != nil {
+					return nil, "", fmt.Errorf("rewrite image request quality: %w", err)
+				}
+			}
+		}
 	}
 	return rewritten, contentType, nil
 }
 
-func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model string) ([]byte, string, error) {
+func rewriteOpenAIImagesMultipartRequestBody(body []byte, contentType string, model string, parsed *OpenAIImagesRequest) ([]byte, string, error) {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return nil, "", fmt.Errorf("parse multipart content-type: %w", err)
@@ -774,6 +1175,9 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 	var buffer bytes.Buffer
 	writer := multipart.NewWriter(&buffer)
 	modelWritten := false
+	sizeWritten := false
+	qualityWritten := false
+	image2Mode := parsed != nil && parsed.UsesImage2Preprocess()
 
 	for {
 		part, err := reader.NextPart()
@@ -785,6 +1189,10 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 		}
 
 		formName := strings.TrimSpace(part.FormName())
+		if part.FileName() == "" && shouldDropOpenAIImagesMultipartField(formName) {
+			_ = part.Close()
+			continue
+		}
 		partHeader := cloneMultipartHeader(part.Header)
 		target, err := writer.CreatePart(partHeader)
 		if err != nil {
@@ -801,6 +1209,32 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 			_ = part.Close()
 			continue
 		}
+		if formName == "size" && part.FileName() == "" && image2Mode {
+			size := strings.TrimSpace(parsed.UpstreamSize)
+			if size == "" {
+				size = strings.TrimSpace(parsed.Size)
+			}
+			if _, err := target.Write([]byte(size)); err != nil {
+				_ = part.Close()
+				return nil, "", fmt.Errorf("rewrite multipart size: %w", err)
+			}
+			sizeWritten = true
+			_ = part.Close()
+			continue
+		}
+		if formName == "quality" && part.FileName() == "" && image2Mode {
+			quality := "low"
+			if parsed != nil && strings.TrimSpace(parsed.Quality) != "" {
+				quality = strings.TrimSpace(parsed.Quality)
+			}
+			if _, err := target.Write([]byte(quality)); err != nil {
+				_ = part.Close()
+				return nil, "", fmt.Errorf("rewrite multipart quality: %w", err)
+			}
+			qualityWritten = true
+			_ = part.Close()
+			continue
+		}
 		if _, err := io.Copy(target, part); err != nil {
 			_ = part.Close()
 			return nil, "", fmt.Errorf("copy multipart part: %w", err)
@@ -813,10 +1247,37 @@ func rewriteOpenAIImagesMultipartModel(body []byte, contentType string, model st
 			return nil, "", fmt.Errorf("append multipart model field: %w", err)
 		}
 	}
+	if image2Mode && !sizeWritten {
+		size := strings.TrimSpace(parsed.UpstreamSize)
+		if size == "" {
+			size = strings.TrimSpace(parsed.Size)
+		}
+		if err := writer.WriteField("size", size); err != nil {
+			return nil, "", fmt.Errorf("append multipart size field: %w", err)
+		}
+	}
+	if image2Mode && !qualityWritten {
+		quality := "low"
+		if parsed != nil && strings.TrimSpace(parsed.Quality) != "" {
+			quality = strings.TrimSpace(parsed.Quality)
+		}
+		if err := writer.WriteField("quality", quality); err != nil {
+			return nil, "", fmt.Errorf("append multipart quality field: %w", err)
+		}
+	}
 	if err := writer.Close(); err != nil {
 		return nil, "", fmt.Errorf("finalize multipart body: %w", err)
 	}
 	return buffer.Bytes(), writer.FormDataContentType(), nil
+}
+
+func shouldDropOpenAIImagesMultipartField(name string) bool {
+	switch strings.TrimSpace(strings.ToLower(name)) {
+	case "image_tier", "resolution_tier", "aspect_ratio":
+		return true
+	default:
+		return false
+	}
 }
 
 func cloneMultipartHeader(src textproto.MIMEHeader) textproto.MIMEHeader {
