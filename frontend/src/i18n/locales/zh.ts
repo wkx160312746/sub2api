@@ -347,6 +347,10 @@ export default {
     usage: '使用记录',
     redeem: '兑换',
     affiliate: '邀请返利',
+    affiliateManagement: '邀请返利',
+    affiliateInviteRecords: '邀请记录',
+    affiliateRebateRecords: '返利记录',
+    affiliateTransferRecords: '提取记录',
     profile: '个人资料',
     users: '用户管理',
     groups: '分组管理',
@@ -844,6 +848,8 @@ export default {
     perMillionTokens: '/ 1M Token',
     unitPrice: '单次价格',
     imageUnitPrice: '单张价格',
+    imageTotalPrice: '图片总价',
+    imageCount: '图片张数',
     cacheRead: '读取',
     cacheWrite: '写入',
     serviceTier: '服务档位',
@@ -1050,6 +1056,7 @@ export default {
     recentActivity: '最近活动',
     historyWillAppear: '您的兑换历史将显示在这里',
     balanceAddedRedeem: '余额充值（兑换）',
+    balanceAddedAffiliate: '余额充值（返利转入）',
     balanceAddedAdmin: '余额充值（管理员）',
     balanceDeductedAdmin: '余额扣除（管理员）',
     concurrencyAddedRedeem: '并发增加（兑换）',
@@ -1656,6 +1663,49 @@ export default {
       }
     },
 
+    affiliates: {
+      invitesDescription: '查看全站邀请关系和被邀请用户累计返利',
+      rebatesDescription: '查看每一笔产生返利的充值订单',
+      transfersDescription: '查看返利额度转入账户余额的提取流水',
+      errors: {
+        loadFailed: '加载邀请返利记录失败'
+      },
+      records: {
+        search: '搜索',
+        searchPlaceholder: '邮箱、用户名、用户 ID、订单号',
+        startAt: '开始日期',
+        endAt: '结束日期',
+        inviter: '邀请人',
+        invitee: '被邀请人',
+        user: '用户',
+        affCode: '邀请码',
+        order: '订单',
+        totalRebate: '累计返利',
+        orderAmount: '充值金额',
+        payAmount: '支付金额',
+        rebateAmount: '返利金额',
+        paymentType: '支付方式',
+        orderStatus: '订单状态',
+        transferAmount: '提取金额',
+        balanceAfter: '提取后余额',
+        availableQuotaAfter: '提取后可提',
+        frozenQuotaAfter: '提取后冻结',
+        historyQuotaAfter: '提取后历史返利',
+        invitedAt: '邀请时间',
+        rebatedAt: '返利时间',
+        transferredAt: '提取时间'
+      },
+      overview: {
+        title: '用户返利概览',
+        affCode: '邀请码',
+        rebateRate: '返利比例',
+        invitedCount: '邀请人数',
+        rebatedInviteeCount: '已产生返利人数',
+        availableQuota: '可提余额',
+        historyQuota: '历史返利'
+      }
+    },
+
     // Users Management
     users: {
       title: '用户管理',
@@ -1844,6 +1894,7 @@ export default {
       noBalanceHistory: '暂无变动记录',
       allTypes: '全部类型',
       typeBalance: '余额（兑换码）',
+      typeAffiliateBalance: '余额（返利转入）',
       typeAdminBalance: '余额（管理员调整）',
       typeConcurrency: '并发（兑换码）',
       typeAdminConcurrency: '并发（管理员调整）',
@@ -2084,7 +2135,13 @@ export default {
       },
       imagePricing: {
         title: '图片生成计费',
-        description: '配置图片生成模型的图片生成价格，留空则使用默认价格'
+        description: '配置图片生成能力和图片基础单价，留空则使用默认价格',
+        allowImageGeneration: '允许当前分组生图',
+        independentMultiplier: '生图倍率独立',
+        imageMultiplier: '生图独立倍率',
+        modeHint: '默认关闭独立倍率时，图片费用 = 图片价格 × 当前分组有效倍率；开启独立倍率后，图片费用 = 图片价格 × 生图独立倍率。',
+        finalPricePreview: '最终单张价格预览',
+        notConfigured: '未配置'
       },
       claudeCode: {
         title: 'Claude Code 客户端限制',
@@ -5178,6 +5235,8 @@ export default {
         metadataPassthroughHint: '透传客户端原始 metadata.user_id，不进行重写。可能提高上游缓存命中率。',
         cchSigning: 'CCH 签名',
         cchSigningHint: '对转发请求的 billing header 进行 CCH 哈希签名。关闭时保留原始占位符。',
+        anthropicCacheTTL1hInjection: 'Anthropic 缓存 TTL 注入',
+        anthropicCacheTTL1hInjectionHint: '开启后，对 Anthropic OAuth/Setup Token 请求体中已有的 ephemeral 缓存块强制写入 1h；响应 usage 默认按 5m 回写计费，账号级 TTL 计费设置优先。',
       },
       webSearchEmulation: {
         title: 'Web Search 模拟',
@@ -5643,6 +5702,16 @@ export default {
         cooldownMinutesHint: '账号暂停调度的持续时间（1-120 分钟）',
         saved: '过载冷却设置保存成功',
         saveFailed: '保存过载冷却设置失败'
+      },
+      rateLimit429Cooldown: {
+        title: '429 默认回避',
+        description: '配置上游返回 429 且没有明确重置时间时的默认账号回避策略',
+        enabled: '启用 429 默认回避',
+        enabledHint: '收到无重置时间的 429 时暂停该账号调度，冷却后自动恢复',
+        cooldownSeconds: '回避时长（秒）',
+        cooldownSecondsHint: '默认回避持续时间（1-7200 秒）；上游返回明确 reset 时仍优先使用上游时间',
+        saved: '429 默认回避设置保存成功',
+        saveFailed: '保存 429 默认回避设置失败'
       },
       streamTimeout: {
         title: '流超时处理',

@@ -439,6 +439,7 @@ export interface SystemSettings {
   enable_fingerprint_unification: boolean;
   enable_metadata_passthrough: boolean;
   enable_cch_signing: boolean;
+  enable_anthropic_cache_ttl_1h_injection: boolean;
   web_search_emulation_enabled?: boolean;
 
   // Payment configuration
@@ -609,6 +610,7 @@ export interface UpdateSettingsRequest {
   enable_fingerprint_unification?: boolean;
   enable_metadata_passthrough?: boolean;
   enable_cch_signing?: boolean;
+  enable_anthropic_cache_ttl_1h_injection?: boolean;
   // Payment configuration
   payment_enabled?: boolean;
   payment_min_amount?: number;
@@ -798,6 +800,30 @@ export async function updateOverloadCooldownSettings(
 ): Promise<OverloadCooldownSettings> {
   const { data } = await apiClient.put<OverloadCooldownSettings>(
     "/admin/settings/overload-cooldown",
+    settings,
+  );
+  return data;
+}
+
+// ==================== 429 Rate Limit Cooldown Settings ====================
+
+export interface RateLimit429CooldownSettings {
+  enabled: boolean;
+  cooldown_seconds: number;
+}
+
+export async function getRateLimit429CooldownSettings(): Promise<RateLimit429CooldownSettings> {
+  const { data } = await apiClient.get<RateLimit429CooldownSettings>(
+    "/admin/settings/rate-limit-429-cooldown",
+  );
+  return data;
+}
+
+export async function updateRateLimit429CooldownSettings(
+  settings: RateLimit429CooldownSettings,
+): Promise<RateLimit429CooldownSettings> {
+  const { data } = await apiClient.put<RateLimit429CooldownSettings>(
+    "/admin/settings/rate-limit-429-cooldown",
     settings,
   );
   return data;
@@ -1022,6 +1048,8 @@ export const settingsAPI = {
   deleteAdminApiKey,
   getOverloadCooldownSettings,
   updateOverloadCooldownSettings,
+  getRateLimit429CooldownSettings,
+  updateRateLimit429CooldownSettings,
   getStreamTimeoutSettings,
   updateStreamTimeoutSettings,
   getRectifierSettings,
