@@ -20,6 +20,10 @@ type SystemSettings struct {
 	FrontendURL                      string
 	InvitationCodeEnabled            bool
 	TotpEnabled                      bool // TOTP 双因素认证
+	LoginAgreementEnabled            bool
+	LoginAgreementMode               string
+	LoginAgreementUpdatedAt          string
+	LoginAgreementDocuments          []LoginAgreementDocument
 
 	SMTPHost               string
 	SMTPPort               int
@@ -89,6 +93,20 @@ type SystemSettings struct {
 	OIDCConnectUserInfoIDPath         string
 	OIDCConnectUserInfoUsernamePath   string
 
+	// GitHub / Google 邮箱快捷登录
+	GitHubOAuthEnabled                bool
+	GitHubOAuthClientID               string
+	GitHubOAuthClientSecret           string
+	GitHubOAuthClientSecretConfigured bool
+	GitHubOAuthRedirectURL            string
+	GitHubOAuthFrontendRedirectURL    string
+	GoogleOAuthEnabled                bool
+	GoogleOAuthClientID               string
+	GoogleOAuthClientSecret           string
+	GoogleOAuthClientSecretConfigured bool
+	GoogleOAuthRedirectURL            string
+	GoogleOAuthFrontendRedirectURL    string
+
 	SiteName                    string
 	SiteLogo                    string
 	SiteSubtitle                string
@@ -106,6 +124,7 @@ type SystemSettings struct {
 
 	DefaultConcurrency           int
 	DefaultBalance               float64
+	RiskControlEnabled           bool
 	AffiliateEnabled             bool
 	AffiliateRebateRate          float64
 	AffiliateRebateFreezeHours   int
@@ -149,10 +168,12 @@ type SystemSettings struct {
 	BackendModeEnabled bool
 
 	// Gateway forwarding behavior
-	EnableFingerprintUnification       bool // 是否统一 OAuth 账号的指纹头（默认 true）
-	EnableMetadataPassthrough          bool // 是否透传客户端原始 metadata（默认 false）
-	EnableCCHSigning                   bool // 是否对 billing header cch 进行签名（默认 false）
-	EnableAnthropicCacheTTL1hInjection bool // 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
+	EnableFingerprintUnification       bool   // 是否统一 OAuth 账号的指纹头（默认 true）
+	EnableMetadataPassthrough          bool   // 是否透传客户端原始 metadata（默认 false）
+	EnableCCHSigning                   bool   // 是否对 billing header cch 进行签名（默认 false）
+	EnableAnthropicCacheTTL1hInjection bool   // 是否对 Anthropic OAuth/SetupToken 请求体注入 1h cache_control ttl（默认 false）
+	RewriteMessageCacheControl         bool   // 是否改写 messages[*].content[*].cache_control（默认 false）
+	AntigravityUserAgentVersion        string // Antigravity 上游 User-Agent 版本号；空值使用配置/默认值
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟
@@ -190,6 +211,11 @@ type PublicSettings struct {
 	PasswordResetEnabled             bool
 	InvitationCodeEnabled            bool
 	TotpEnabled                      bool // TOTP 双因素认证
+	LoginAgreementEnabled            bool
+	LoginAgreementMode               string
+	LoginAgreementUpdatedAt          string
+	LoginAgreementRevision           string
+	LoginAgreementDocuments          []LoginAgreementDocument
 	TurnstileEnabled                 bool
 	TurnstileSiteKey                 string
 	SiteName                         string
@@ -217,6 +243,8 @@ type PublicSettings struct {
 	PaymentEnabled           bool
 	OIDCOAuthEnabled         bool
 	OIDCOAuthProviderName    string
+	GitHubOAuthEnabled       bool
+	GoogleOAuthEnabled       bool
 	Version                  string
 
 	BalanceLowNotifyEnabled     bool
@@ -233,6 +261,15 @@ type PublicSettings struct {
 
 	// Affiliate (邀请返利) feature toggle
 	AffiliateEnabled bool `json:"affiliate_enabled"`
+
+	// 风控中心功能开关
+	RiskControlEnabled bool `json:"risk_control_enabled"`
+}
+
+type LoginAgreementDocument struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	ContentMD string `json:"content_md"`
 }
 
 type WeChatConnectOAuthConfig struct {
