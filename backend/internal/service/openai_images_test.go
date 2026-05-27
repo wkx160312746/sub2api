@@ -97,6 +97,82 @@ func TestOpenAIImageTaskResultFromRecorder_URLResponseFormatStoresImageURL(t *te
 	require.NotContains(t, item, "b64_json")
 }
 
+func TestOpenAIImageTaskResultFromRecorder_URLResponseFormatKeepsTOSURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+	rec.Code = http.StatusOK
+	rec.Body.WriteString(`{"created":1710000007,"data":[{"url":"https://open-api.tos-cn-beijing.volces.com/image2/result.png","revised_prompt":"draw a cat","output_format":"png"}]}`)
+
+	resultDir := t.TempDir()
+	svc := &OpenAIImageTaskService{resultDir: resultDir}
+	payload := svc.openAIImageTaskResultFromRecorder(&OpenAIImageTask{
+		ID:     "imgtask_test",
+		parsed: &OpenAIImagesRequest{ResponseFormat: "url"},
+	}, rec)
+
+	require.NotNil(t, payload)
+	require.Equal(t, "https://open-api.tos-cn-beijing.volces.com/image2/result.png", payload["url"])
+	require.NotContains(t, payload, "storage_key")
+
+	entries, err := os.ReadDir(resultDir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	response, ok := payload["response"].(map[string]any)
+	require.True(t, ok)
+	data, ok := response["data"].([]any)
+	require.True(t, ok)
+	require.Len(t, data, 1)
+	item, ok := data[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "https://open-api.tos-cn-beijing.volces.com/image2/result.png", item["url"])
+	require.NotContains(t, item, "b64_json")
+}
+
+func TestOpenAIImageTaskResultFromRecorder_URLResponseFormatStoresImageToTOS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const png1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+	rec.Code = http.StatusOK
+	rec.Body.WriteString(`{"created":1710000007,"data":[{"b64_json":"` + png1x1 + `","revised_prompt":"draw a cat","output_format":"png"}]}`)
+
+	storage, client := newTestTOSStorage()
+	resultDir := t.TempDir()
+	svc := &OpenAIImageTaskService{
+		resultDir: resultDir,
+		gateway: &OpenAIGatewayService{
+			imageTOSStorage: storage,
+		},
+	}
+	payload := svc.openAIImageTaskResultFromRecorder(&OpenAIImageTask{
+		ID:     "imgtask_test",
+		parsed: &OpenAIImagesRequest{ResponseFormat: "url"},
+	}, rec)
+
+	require.NotNil(t, payload)
+	require.Equal(t, "https://cdn.example.com/"+escapeTOSObjectKey(client.putInputs[0].Key), payload["url"])
+	require.Equal(t, client.putInputs[0].Key, payload["storage_key"])
+	require.Equal(t, "image/png", payload["mime_type"])
+
+	entries, err := os.ReadDir(resultDir)
+	require.NoError(t, err)
+	require.Empty(t, entries)
+
+	response, ok := payload["response"].(map[string]any)
+	require.True(t, ok)
+	data, ok := response["data"].([]any)
+	require.True(t, ok)
+	require.Len(t, data, 1)
+	item, ok := data[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "https://cdn.example.com/"+escapeTOSObjectKey(client.putInputs[0].Key), item["url"])
+	require.NotContains(t, item, "b64_json")
+}
+
 func TestOpenAIGatewayServiceParseOpenAIImagesRequest_JSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","quality":"high","stream":true}`)

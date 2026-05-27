@@ -584,7 +584,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 	if err != nil {
 		return OpenAIUsage{}, 0, err
 	}
-	if rewritten, rewriteErr := s.rewriteOpenAIImagesResponseWithTOS(c.Request.Context(), responseBody); rewriteErr != nil {
+	if rewritten, rewriteErr := s.rewriteOpenAIImagesResponseWithTOS(c.Request.Context(), responseBody, responseFormat); rewriteErr != nil {
 		return OpenAIUsage{}, 0, rewriteErr
 	} else {
 		responseBody = rewritten
@@ -727,7 +727,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				}
 				payload := buildOpenAIImagesStreamCompletedPayload(eventName, img, format, createdAt, usageRaw)
 				var rewriteErr error
-				payload, rewriteErr = s.rewriteOpenAIImagesEventPayloadWithTOS(c.Request.Context(), payload)
+				payload, rewriteErr = s.rewriteOpenAIImagesEventPayloadWithTOS(c.Request.Context(), payload, format)
 				if rewriteErr != nil {
 					s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBody(rewriteErr.Error()))
 					processDataErr = rewriteErr
@@ -775,7 +775,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthStreamingResponse(
 				}
 				payload := buildOpenAIImagesStreamCompletedPayload(eventName, img, format, createdAt, nil)
 				var rewriteErr error
-				payload, rewriteErr = s.rewriteOpenAIImagesEventPayloadWithTOS(c.Request.Context(), payload)
+				payload, rewriteErr = s.rewriteOpenAIImagesEventPayloadWithTOS(c.Request.Context(), payload, format)
 				if rewriteErr != nil {
 					s.tryWriteOpenAIImagesStreamEvent(c, flusher, &clientDisconnected, &lastDownstreamWriteAt, "error", buildOpenAIImagesStreamErrorBody(rewriteErr.Error()))
 					return rewriteErr

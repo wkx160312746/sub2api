@@ -9,12 +9,13 @@ image2 的同步接口和异步图片任务最终都会走 `OpenAIGatewayService
 - 使用 SDK `PutObjectV2` 直接把解码后的图片 bytes 上传到 TOS。
 - 如果配置了 `public_base_url`，返回 `<public_base_url>/<object key>`。
 - 如果没有配置公共域名且配置了读取链接过期时间，使用 SDK `PreSignedURL` 生成 GET 预签名读取 URL。
+- 如果没有配置 `public_base_url` 和预签名读取链接，按火山 TOS bucket endpoint 生成 `https://<bucket>.<endpoint>/<object key>`。
 
 目标 bucket 固定为 `open-api`。
 
 ## 决策
 
-使用 Volcengine TOS SDK 直连 TOS。网关会在 image2 结果写回客户端之前，把图片输出上传到 TOS。启用并配置 TOS 后，原本包含 `b64_json` 或 `data:image/...;base64,...` 的图片响应会被改写成 TOS URL 响应；未配置 TOS 时保持现有行为不变。
+使用 Volcengine TOS SDK 直连 TOS。网关会在 image2 结果写回客户端之前，把图片输出上传到 TOS。启用并配置 TOS 后，图片结果会被持久化到 TOS；最终响应仍尊重客户端 `response_format`：请求 `url` 时返回 TOS 可访问 URL，请求 `b64_json` 时保留 base64 响应。未配置 TOS 时保持现有行为不变。
 
 ## 配置
 
@@ -51,7 +52,7 @@ image2 的同步接口和异步图片任务最终都会走 `OpenAIGatewayService
 1. 像现在一样读取上游响应体。
 2. 检测 `data[].b64_json`，以及 `data[].url` 中的 data URL。
 3. 逐张图片上传到 TOS。
-4. 把每个图片 item 改成 `url: <tosReadUrl>`，并移除 `b64_json`。
+4. 根据请求的 `response_format` 输出：`url` 模式改成 `url: <tosReadUrl>` 并移除 `b64_json`；`b64_json` 模式保留 `b64_json` 并移除 data URL。
 5. 写出改写后的 JSON 响应。
 
 OAuth Responses 图片转换：
@@ -64,13 +65,13 @@ OAuth Responses 图片转换：
 
 1. partial image 事件保持不变，客户端仍然可以展示生成进度。
 2. final completed 图片事件在发送前上传最终图片。
-3. completed payload 使用 `url` 返回，不再返回 base64 图片数据。
+3. completed payload 按 `response_format` 返回；`url` 模式返回 TOS URL，`b64_json` 模式保留 base64。
 
 ## 错误处理
 
 如果 TOS 未启用或配置不完整，图片输出保持现状。
 
-如果 TOS 已启用，但上传或读取链接生成失败，本次 image 请求失败，不回退返回 base64。这样启用后的契约更清楚：成功的 image2 响应一定包含可用的 TOS URL。如果既没有配置公共访问域名，也没有配置 `read_link_expires_seconds`，则视为 TOS 读取 URL 配置不完整。
+如果 TOS 已启用，但上传或读取链接生成失败，本次 image 请求失败，不回退返回未持久化结果。这样启用后的契约更清楚：成功的 `response_format=url` image2 响应一定包含可用的 TOS URL。
 
 返回给客户端的错误信息需要做脱敏；服务端日志保留足够上下文，用于定位失败发生在 TOS 的哪个步骤、哪个 bucket，以及已生成的对象 key。
 
@@ -79,7 +80,8 @@ OAuth Responses 图片转换：
 围绕响应改写 helper 和 TOS client 增加单元测试：
 
 - SDK client 初始化使用 bucket `open-api`、endpoint、region、AK/SK。
-- `b64_json` 图片会上传并改写为 `url`。
+- `response_format=url` 时，`b64_json` 图片会上传并改写为 `url`。
+- `response_format=b64_json` 时，图片会上传持久化，但响应保留 `b64_json`。
 - `url` 字段里的 data URL 会上传并改写为普通 URL。
 - 已经是普通 URL 的响应保持不变。
 - TOS 未启用时响应保持不变。

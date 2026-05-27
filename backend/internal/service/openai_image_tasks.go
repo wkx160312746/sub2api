@@ -552,10 +552,18 @@ func (s *OpenAIImageTaskService) openAIImageTaskResultFromRecorder(task *OpenAII
 			response = sanitizeOpenAIImageTaskStoredResponse(response, asset)
 			payload["response"] = response
 			payload["url"] = asset.URL
-			payload["storage_key"] = asset.StorageKey
-			payload["mime_type"] = asset.MimeType
-			payload["width"] = asset.Width
-			payload["height"] = asset.Height
+			if asset.StorageKey != "" {
+				payload["storage_key"] = asset.StorageKey
+			}
+			if asset.MimeType != "" {
+				payload["mime_type"] = asset.MimeType
+			}
+			if asset.Width > 0 {
+				payload["width"] = asset.Width
+			}
+			if asset.Height > 0 {
+				payload["height"] = asset.Height
+			}
 			if asset.ByteSize > 0 {
 				payload["byte_size"] = asset.ByteSize
 			}
@@ -622,6 +630,11 @@ func (s *OpenAIImageTaskService) storeOpenAIImageTaskResult(task *OpenAIImageTas
 		url := strings.TrimSpace(item.Get("url").String())
 		if strings.HasPrefix(strings.ToLower(url), "data:image/") {
 			b64 = normalizeOpenAIImageBase64(url)
+		} else if url != "" {
+			return &openAIImageTaskStoredAsset{
+				URL:      url,
+				MimeType: openAIImageTaskMimeType(openAIImageTaskOutputExtension(item.Get("output_format").String())),
+			}, nil
 		}
 	}
 	if b64 == "" {
@@ -640,6 +653,17 @@ func (s *OpenAIImageTaskService) storeOpenAIImageTaskResult(task *OpenAIImageTas
 		stored = decoded
 		mimeType = openAIImageTaskMimeType(ext)
 	}
+	if width <= 0 || height <= 0 {
+		if cfg, _, err := image.DecodeConfig(bytes.NewReader(stored)); err == nil {
+			width = cfg.Width
+			height = cfg.Height
+		}
+	}
+	if asset, err := s.storeOpenAIImageTaskResultToTOS(context.Background(), stored, ext, mimeType, width, height); err != nil {
+		return nil, err
+	} else if asset != nil {
+		return asset, nil
+	}
 	dir := s.resultDir
 	if dir == "" {
 		dir = resolveOpenAIImageTaskResultDir(nil)
@@ -652,12 +676,6 @@ func (s *OpenAIImageTaskService) storeOpenAIImageTaskResult(task *OpenAIImageTas
 	if err := os.WriteFile(path, stored, 0o644); err != nil {
 		return nil, err
 	}
-	if width <= 0 || height <= 0 {
-		if cfg, _, err := image.DecodeConfig(bytes.NewReader(stored)); err == nil {
-			width = cfg.Width
-			height = cfg.Height
-		}
-	}
 	return &openAIImageTaskStoredAsset{
 		URL:        "/generated/images/" + filename,
 		StorageKey: "generated/images/" + filename,
@@ -665,6 +683,35 @@ func (s *OpenAIImageTaskService) storeOpenAIImageTaskResult(task *OpenAIImageTas
 		Width:      width,
 		Height:     height,
 		ByteSize:   len(stored),
+	}, nil
+}
+
+func (s *OpenAIImageTaskService) storeOpenAIImageTaskResultToTOS(ctx context.Context, data []byte, ext string, contentType string, width int, height int) (*openAIImageTaskStoredAsset, error) {
+	if s == nil || s.gateway == nil || len(data) == 0 {
+		return nil, nil
+	}
+	storage := s.gateway.imageStorage()
+	if storage == nil || !storage.Enabled() {
+		return nil, nil
+	}
+	if strings.TrimSpace(contentType) == "" {
+		contentType = openAIImageTaskMimeType(ext)
+	}
+	uploaded, err := storage.UploadImage(ctx, TOSImageUploadInput{
+		Data:        data,
+		ContentType: contentType,
+		Extension:   ext,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &openAIImageTaskStoredAsset{
+		URL:        uploaded.URL,
+		StorageKey: uploaded.Key,
+		MimeType:   uploaded.ContentType,
+		Width:      width,
+		Height:     height,
+		ByteSize:   int(uploaded.ByteSize),
 	}, nil
 }
 

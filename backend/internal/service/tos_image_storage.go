@@ -161,14 +161,17 @@ func (s *TOSImageStorage) readURL(ctx context.Context, client tosImageClient, ke
 	if base := strings.TrimRight(strings.TrimSpace(s.cfg.PublicBaseURL), "/"); base != "" {
 		return base + "/" + escapeTOSObjectKey(key), nil
 	}
-	if s.cfg.ReadLinkExpiresSeconds <= 0 {
-		return "", errors.New("gateway.image_tos.public_base_url or read_link_expires_seconds is required")
+	if s.cfg.ReadLinkExpiresSeconds > 0 {
+		signed, err := client.PreSignedGetURL(ctx, s.cfg.Bucket, key, int64(s.cfg.ReadLinkExpiresSeconds))
+		if err != nil {
+			return "", fmt.Errorf("generate TOS read URL: %w", err)
+		}
+		return signed, nil
 	}
-	signed, err := client.PreSignedGetURL(ctx, s.cfg.Bucket, key, int64(s.cfg.ReadLinkExpiresSeconds))
-	if err != nil {
-		return "", fmt.Errorf("generate TOS read URL: %w", err)
+	if base := volcengineTOSPublicBaseURL(s.cfg.Endpoint, s.cfg.Bucket); base != "" {
+		return base + "/" + escapeTOSObjectKey(key), nil
 	}
-	return signed, nil
+	return "", errors.New("gateway.image_tos.public_base_url, read_link_expires_seconds, or valid Volcengine endpoint is required")
 }
 
 func openAIImageTOSExtension(values ...string) string {
@@ -198,6 +201,28 @@ func escapeTOSObjectKey(key string) string {
 		parts[i] = url.PathEscape(part)
 	}
 	return strings.Join(parts, "/")
+}
+
+func volcengineTOSPublicBaseURL(endpoint, bucket string) string {
+	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	bucket = strings.TrimSpace(bucket)
+	if endpoint == "" || bucket == "" {
+		return ""
+	}
+	if !strings.Contains(endpoint, "://") {
+		endpoint = "https://" + endpoint
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	if !strings.HasPrefix(strings.ToLower(parsed.Host), strings.ToLower(bucket)+".") {
+		parsed.Host = bucket + "." + parsed.Host
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	return strings.TrimRight(parsed.String(), "/")
 }
 
 type volcengineTOSImageClient struct {
@@ -241,11 +266,14 @@ func (c *volcengineTOSImageClient) PreSignedGetURL(ctx context.Context, bucket, 
 }
 
 func (s *OpenAIGatewayService) imageStorage() openAIImageStorage {
-	if s == nil || s.cfg == nil {
+	if s == nil {
 		return nil
 	}
 	if s.imageTOSStorage != nil {
 		return s.imageTOSStorage
+	}
+	if s.cfg == nil {
+		return nil
 	}
 	s.imageTOSStorageOnce.Do(func() {
 		storage := newTOSImageStorage(s.cfg.Gateway.ImageTOS, nil)
@@ -256,15 +284,15 @@ func (s *OpenAIGatewayService) imageStorage() openAIImageStorage {
 	return s.imageTOSStorage
 }
 
-func (s *OpenAIGatewayService) rewriteOpenAIImagesResponseWithTOS(ctx context.Context, body []byte) ([]byte, error) {
-	return rewriteOpenAIImagesResponseWithStorage(ctx, body, s.imageStorage())
+func (s *OpenAIGatewayService) rewriteOpenAIImagesResponseWithTOS(ctx context.Context, body []byte, responseFormat string) ([]byte, error) {
+	return rewriteOpenAIImagesResponseWithStorage(ctx, body, s.imageStorage(), responseFormat)
 }
 
-func (s *OpenAIGatewayService) rewriteOpenAIImagesEventPayloadWithTOS(ctx context.Context, payload []byte) ([]byte, error) {
-	return rewriteOpenAIImagesEventPayloadWithStorage(ctx, payload, s.imageStorage())
+func (s *OpenAIGatewayService) rewriteOpenAIImagesEventPayloadWithTOS(ctx context.Context, payload []byte, responseFormat string) ([]byte, error) {
+	return rewriteOpenAIImagesEventPayloadWithStorage(ctx, payload, s.imageStorage(), responseFormat)
 }
 
-func rewriteOpenAIImagesResponseWithStorage(ctx context.Context, body []byte, storage openAIImageStorage) ([]byte, error) {
+func rewriteOpenAIImagesResponseWithStorage(ctx context.Context, body []byte, storage openAIImageStorage, responseFormat string) ([]byte, error) {
 	if storage == nil || !storage.Enabled() || len(body) == 0 || !gjson.ValidBytes(body) {
 		return body, nil
 	}
@@ -274,7 +302,7 @@ func rewriteOpenAIImagesResponseWithStorage(ctx context.Context, body []byte, st
 		return body, nil
 	}
 	for index, item := range items.Array() {
-		rewritten, err := rewriteOpenAIImagesItemWithStorage(ctx, out, fmt.Sprintf("data.%d", index), item, storage)
+		rewritten, err := rewriteOpenAIImagesItemWithStorage(ctx, out, fmt.Sprintf("data.%d", index), item, storage, responseFormat)
 		if err != nil {
 			return nil, err
 		}
@@ -283,7 +311,7 @@ func rewriteOpenAIImagesResponseWithStorage(ctx context.Context, body []byte, st
 	return out, nil
 }
 
-func rewriteOpenAIImagesEventPayloadWithStorage(ctx context.Context, payload []byte, storage openAIImageStorage) ([]byte, error) {
+func rewriteOpenAIImagesEventPayloadWithStorage(ctx context.Context, payload []byte, storage openAIImageStorage, responseFormat string) ([]byte, error) {
 	if storage == nil || !storage.Enabled() || len(payload) == 0 || !gjson.ValidBytes(payload) {
 		return payload, nil
 	}
@@ -291,10 +319,10 @@ func rewriteOpenAIImagesEventPayloadWithStorage(ctx context.Context, payload []b
 	if eventType == "" || !strings.HasSuffix(eventType, ".completed") {
 		return payload, nil
 	}
-	return rewriteOpenAIImagesItemWithStorage(ctx, payload, "", gjson.ParseBytes(payload), storage)
+	return rewriteOpenAIImagesItemWithStorage(ctx, payload, "", gjson.ParseBytes(payload), storage, responseFormat)
 }
 
-func rewriteOpenAIImagesSSEEventLinesWithStorage(ctx context.Context, lines []string, storage openAIImageStorage) ([]string, error) {
+func rewriteOpenAIImagesSSEEventLinesWithStorage(ctx context.Context, lines []string, storage openAIImageStorage, responseFormat string) ([]string, error) {
 	if storage == nil || !storage.Enabled() || len(lines) == 0 {
 		return lines, nil
 	}
@@ -312,7 +340,7 @@ func rewriteOpenAIImagesSSEEventLinesWithStorage(ctx context.Context, lines []st
 		return lines, nil
 	}
 	payload := strings.Join(dataLines, "\n")
-	rewritten, err := rewriteOpenAIImagesEventPayloadWithStorage(ctx, []byte(payload), storage)
+	rewritten, err := rewriteOpenAIImagesEventPayloadWithStorage(ctx, []byte(payload), storage, responseFormat)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +362,7 @@ func rewriteOpenAIImagesSSEEventLinesWithStorage(ctx context.Context, lines []st
 	return out, nil
 }
 
-func rewriteOpenAIImagesItemWithStorage(ctx context.Context, body []byte, itemPath string, item gjson.Result, storage openAIImageStorage) ([]byte, error) {
+func rewriteOpenAIImagesItemWithStorage(ctx context.Context, body []byte, itemPath string, item gjson.Result, storage openAIImageStorage, responseFormat string) ([]byte, error) {
 	if !item.Exists() {
 		return body, nil
 	}
@@ -356,19 +384,49 @@ func rewriteOpenAIImagesItemWithStorage(ctx context.Context, body []byte, itemPa
 	if err != nil {
 		return nil, err
 	}
-	urlPath := joinJSONPath(itemPath, "url")
-	out, err := sjson.SetBytes(body, urlPath, uploaded.URL)
+	if openAIImagesShouldReturnURL(responseFormat) {
+		urlPath := joinJSONPath(itemPath, "url")
+		out, err := sjson.SetBytes(body, urlPath, uploaded.URL)
+		if err != nil {
+			return nil, err
+		}
+		b64Path := joinJSONPath(itemPath, "b64_json")
+		if gjson.GetBytes(out, b64Path).Exists() {
+			out, err = sjson.DeleteBytes(out, b64Path)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	}
+
+	b64Path := joinJSONPath(itemPath, "b64_json")
+	out, err := sjson.SetBytes(body, b64Path, openAIImageBase64ForClient(b64))
 	if err != nil {
 		return nil, err
 	}
-	b64Path := joinJSONPath(itemPath, "b64_json")
-	if gjson.GetBytes(out, b64Path).Exists() {
-		out, err = sjson.DeleteBytes(out, b64Path)
+	urlPath := joinJSONPath(itemPath, "url")
+	if gjson.GetBytes(out, urlPath).Exists() {
+		out, err = sjson.DeleteBytes(out, urlPath)
 		if err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
+}
+
+func openAIImagesShouldReturnURL(responseFormat string) bool {
+	return strings.EqualFold(strings.TrimSpace(responseFormat), "url")
+}
+
+func openAIImageBase64ForClient(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(raw), "data:") {
+		if idx := strings.Index(raw, ","); idx >= 0 && idx+1 < len(raw) {
+			return strings.TrimSpace(raw[idx+1:])
+		}
+	}
+	return raw
 }
 
 func normalizeOpenAIImageBase64ForTOS(raw string) string {

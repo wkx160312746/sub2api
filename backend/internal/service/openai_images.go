@@ -1060,7 +1060,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 	imageCount := parsed.N
 	var firstTokenMs *int
 	if parsed.Stream && isEventStreamResponse(resp.Header) {
-		streamUsage, streamCount, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime)
+		streamUsage, streamCount, ttft, err := s.handleOpenAIImagesStreamingResponse(resp, c, startTime, parsed.ResponseFormat)
 		if err != nil {
 			if streamCount > 0 {
 				return &OpenAIForwardResult{
@@ -1082,7 +1082,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesAPIKey(
 		imageCount = streamCount
 		firstTokenMs = ttft
 	} else {
-		nonStreamUsage, nonStreamCount, err := s.handleOpenAIImagesNonStreamingResponse(resp, c)
+		nonStreamUsage, nonStreamCount, err := s.handleOpenAIImagesNonStreamingResponse(resp, c, parsed.ResponseFormat)
 		if err != nil {
 			return nil, err
 		}
@@ -1353,12 +1353,12 @@ func cloneMultipartHeader(src textproto.MIMEHeader) textproto.MIMEHeader {
 	return dst
 }
 
-func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(resp *http.Response, c *gin.Context) (OpenAIUsage, int, error) {
+func (s *OpenAIGatewayService) handleOpenAIImagesNonStreamingResponse(resp *http.Response, c *gin.Context, responseFormat string) (OpenAIUsage, int, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return OpenAIUsage{}, 0, err
 	}
-	if rewritten, rewriteErr := s.rewriteOpenAIImagesResponseWithTOS(c.Request.Context(), body); rewriteErr != nil {
+	if rewritten, rewriteErr := s.rewriteOpenAIImagesResponseWithTOS(c.Request.Context(), body, responseFormat); rewriteErr != nil {
 		return OpenAIUsage{}, 0, rewriteErr
 	} else {
 		body = rewritten
@@ -1380,6 +1380,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
 	startTime time.Time,
+	responseFormat string,
 ) (OpenAIUsage, int, *int, error) {
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
@@ -1417,7 +1418,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 
 	flushSSEEvent := func() error {
 		if len(currentSSEEventLines) > 0 {
-			linesToWrite, rewriteErr := rewriteOpenAIImagesSSEEventLinesWithStorage(c.Request.Context(), currentSSEEventLines, s.imageStorage())
+			linesToWrite, rewriteErr := rewriteOpenAIImagesSSEEventLinesWithStorage(c.Request.Context(), currentSSEEventLines, s.imageStorage(), responseFormat)
 			if rewriteErr != nil {
 				currentSSEEventLines = currentSSEEventLines[:0]
 				return rewriteErr
