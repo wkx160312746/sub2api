@@ -455,6 +455,7 @@ func (s *OpenAIImageTaskService) forwardTaskWithFailover(c *gin.Context, task *O
 		return nil, nil, fmt.Errorf("invalid image task")
 	}
 	var failedAccountIDs map[int64]struct{}
+	var lastForwardErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		selection, _, err := s.gateway.SelectAccountWithSchedulerForImages(
 			context.Background(),
@@ -465,10 +466,10 @@ func (s *OpenAIImageTaskService) forwardTaskWithFailover(c *gin.Context, task *O
 			task.parsed.RequiredCapability,
 		)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, openAIImageTaskFinalForwardError(err, lastForwardErr)
 		}
 		if selection == nil || selection.Account == nil {
-			return nil, nil, fmt.Errorf("no available compatible accounts")
+			return nil, nil, openAIImageTaskFinalForwardError(fmt.Errorf("no available compatible accounts"), lastForwardErr)
 		}
 		account := selection.Account
 		result, err := s.gateway.ForwardImages(context.Background(), c, account, task.RequestBody, task.parsed, task.ChannelMappedModel)
@@ -476,13 +477,56 @@ func (s *OpenAIImageTaskService) forwardTaskWithFailover(c *gin.Context, task *O
 			s.gateway.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 			return account, result, nil
 		}
+		lastForwardErr = openAIImageTaskPreserveForwardError(err)
 		s.gateway.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 		if failedAccountIDs == nil {
 			failedAccountIDs = make(map[int64]struct{})
 		}
 		failedAccountIDs[account.ID] = struct{}{}
 	}
-	return nil, nil, fmt.Errorf("image task failed after account failover")
+	return nil, nil, openAIImageTaskFinalForwardError(fmt.Errorf("image task failed after account failover"), lastForwardErr)
+}
+
+func openAIImageTaskPreserveForwardError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var failoverErr *UpstreamFailoverError
+	if errors.As(err, &failoverErr) {
+		msg := strings.TrimSpace(sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(failoverErr.ResponseBody)))
+		if msg != "" {
+			if failoverErr.StatusCode > 0 {
+				return fmt.Errorf("upstream error: %d message=%s", failoverErr.StatusCode, msg)
+			}
+			return fmt.Errorf("upstream error: message=%s", msg)
+		}
+		if failoverErr.StatusCode > 0 {
+			return fmt.Errorf("upstream error: %d", failoverErr.StatusCode)
+		}
+	}
+	return err
+}
+
+func openAIImageTaskFinalForwardError(finalErr, lastForwardErr error) error {
+	if lastForwardErr == nil {
+		return finalErr
+	}
+	if finalErr == nil || openAIImageTaskShouldPreferLastForwardError(finalErr) {
+		return lastForwardErr
+	}
+	return finalErr
+}
+
+func openAIImageTaskShouldPreferLastForwardError(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, ErrNoAvailableAccounts) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "no available") ||
+		strings.Contains(msg, "failed after account failover")
 }
 
 func (s *OpenAIImageTaskService) getMutableTask(id string) *OpenAIImageTask {
