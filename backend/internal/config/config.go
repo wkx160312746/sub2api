@@ -644,6 +644,8 @@ type GatewayConfig struct {
 	// ImageTaskResultDir: 异步图片任务结果落盘目录。
 	// 为空时使用 DATA_DIR/generated/images，DATA_DIR 为空则回退 /app/data/generated/images。
 	ImageTaskResultDir string `mapstructure:"image_task_result_dir"`
+	// ImageTOS: image2 输出上传 Volcengine TOS 后返回 URL 的配置。
+	ImageTOS GatewayImageTOSConfig `mapstructure:"image_tos"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// ImageConcurrency: 图片生成独立并发限制配置（默认关闭）
@@ -722,6 +724,20 @@ type GatewayConfig struct {
 	// UserMessageQueue: 用户消息串行队列配置
 	// 对 role:"user" 的真实用户消息实施账号级串行化 + RPM 自适应延迟
 	UserMessageQueue UserMessageQueueConfig `mapstructure:"user_message_queue"`
+}
+
+// GatewayImageTOSConfig image2 输出上传 Volcengine TOS 的配置。
+type GatewayImageTOSConfig struct {
+	Enabled                 bool   `mapstructure:"enabled"`
+	Endpoint                string `mapstructure:"endpoint"`
+	Region                  string `mapstructure:"region"`
+	AccessKeyID             string `mapstructure:"access_key_id"`
+	SecretAccessKey         string `mapstructure:"secret_access_key"`
+	Bucket                  string `mapstructure:"bucket"`
+	PublicBaseURL           string `mapstructure:"public_base_url"`
+	Prefix                  string `mapstructure:"prefix"`
+	UploadURLExpiresSeconds int    `mapstructure:"upload_url_expires_seconds"`
+	ReadLinkExpiresSeconds  int    `mapstructure:"read_link_expires_seconds"`
 }
 
 // UserMessageQueueConfig 用户消息串行队列配置
@@ -1333,6 +1349,13 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Log.Environment = strings.TrimSpace(cfg.Log.Environment)
 	cfg.Log.StacktraceLevel = strings.ToLower(strings.TrimSpace(cfg.Log.StacktraceLevel))
 	cfg.Log.Output.FilePath = strings.TrimSpace(cfg.Log.Output.FilePath)
+	cfg.Gateway.ImageTOS.Endpoint = strings.TrimSpace(cfg.Gateway.ImageTOS.Endpoint)
+	cfg.Gateway.ImageTOS.Region = strings.TrimSpace(cfg.Gateway.ImageTOS.Region)
+	cfg.Gateway.ImageTOS.AccessKeyID = strings.TrimSpace(cfg.Gateway.ImageTOS.AccessKeyID)
+	cfg.Gateway.ImageTOS.SecretAccessKey = strings.TrimSpace(cfg.Gateway.ImageTOS.SecretAccessKey)
+	cfg.Gateway.ImageTOS.Bucket = strings.TrimSpace(cfg.Gateway.ImageTOS.Bucket)
+	cfg.Gateway.ImageTOS.PublicBaseURL = strings.TrimSpace(cfg.Gateway.ImageTOS.PublicBaseURL)
+	cfg.Gateway.ImageTOS.Prefix = strings.Trim(strings.TrimSpace(cfg.Gateway.ImageTOS.Prefix), "/")
 	cfg.Gateway.ForcedCodexInstructionsTemplateFile = strings.TrimSpace(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
 	if cfg.Gateway.ForcedCodexInstructionsTemplateFile != "" {
 		content, err := os.ReadFile(cfg.Gateway.ForcedCodexInstructionsTemplateFile)
@@ -1677,6 +1700,16 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.openai_images_omit_reasoning", false)
 	viper.SetDefault("gateway.image_task_result_dir", "")
+	viper.SetDefault("gateway.image_tos.enabled", false)
+	viper.SetDefault("gateway.image_tos.endpoint", "")
+	viper.SetDefault("gateway.image_tos.region", "")
+	viper.SetDefault("gateway.image_tos.access_key_id", "")
+	viper.SetDefault("gateway.image_tos.secret_access_key", "")
+	viper.SetDefault("gateway.image_tos.bucket", "open-api")
+	viper.SetDefault("gateway.image_tos.public_base_url", "")
+	viper.SetDefault("gateway.image_tos.prefix", "")
+	viper.SetDefault("gateway.image_tos.upload_url_expires_seconds", 900)
+	viper.SetDefault("gateway.image_tos.read_link_expires_seconds", 0)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
@@ -2311,6 +2344,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.ImageConcurrency.MaxWaitingRequests < 0 {
 		return fmt.Errorf("gateway.image_concurrency.max_waiting_requests must be non-negative")
+	}
+	if c.Gateway.ImageTOS.UploadURLExpiresSeconds < 0 {
+		return fmt.Errorf("gateway.image_tos.upload_url_expires_seconds must be non-negative")
+	}
+	if c.Gateway.ImageTOS.ReadLinkExpiresSeconds < 0 {
+		return fmt.Errorf("gateway.image_tos.read_link_expires_seconds must be non-negative")
 	}
 	if c.Gateway.MaxIdleConns <= 0 {
 		return fmt.Errorf("gateway.max_idle_conns must be positive")

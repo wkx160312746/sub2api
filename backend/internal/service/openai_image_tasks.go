@@ -547,18 +547,28 @@ func (s *OpenAIImageTaskService) openAIImageTaskResultFromRecorder(task *OpenAII
 		"mime_type":   rec.Header().Get("Content-Type"),
 		"response":    response,
 	}
-	if asset, err := s.storeOpenAIImageTaskResult(task, []byte(body)); err == nil && asset != nil {
-		response = sanitizeOpenAIImageTaskStoredResponse(response, asset)
-		payload["url"] = asset.URL
-		payload["storage_key"] = asset.StorageKey
-		payload["mime_type"] = asset.MimeType
-		payload["width"] = asset.Width
-		payload["height"] = asset.Height
-		if asset.ByteSize > 0 {
-			payload["byte_size"] = asset.ByteSize
+	if taskRequestsImageURL(task) {
+		if asset, err := s.storeOpenAIImageTaskResult(task, []byte(body)); err == nil && asset != nil {
+			response = sanitizeOpenAIImageTaskStoredResponse(response, asset)
+			payload["response"] = response
+			payload["url"] = asset.URL
+			payload["storage_key"] = asset.StorageKey
+			payload["mime_type"] = asset.MimeType
+			payload["width"] = asset.Width
+			payload["height"] = asset.Height
+			if asset.ByteSize > 0 {
+				payload["byte_size"] = asset.ByteSize
+			}
 		}
 	}
 	return payload
+}
+
+func taskRequestsImageURL(task *OpenAIImageTask) bool {
+	if task == nil || task.parsed == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(task.parsed.ResponseFormat), "url")
 }
 
 func sanitizeOpenAIImageTaskStoredResponse(response any, asset *openAIImageTaskStoredAsset) any {

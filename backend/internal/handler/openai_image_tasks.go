@@ -12,6 +12,7 @@ import (
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/sjson"
 )
 
 func (h *OpenAIGatewayHandler) CreateImageTask(c *gin.Context) {
@@ -54,6 +55,10 @@ func (h *OpenAIGatewayHandler) CreateImageTask(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "stream is not supported for image tasks")
 		return
 	}
+	if parsed.ResponseFormat != "" && parsed.ResponseFormat != "b64_json" && parsed.ResponseFormat != "url" {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "response_format must be b64_json or url for image tasks")
+		return
+	}
 	if parsed.Multipart {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "multipart image tasks are not supported")
 		return
@@ -68,6 +73,15 @@ func (h *OpenAIGatewayHandler) CreateImageTask(c *gin.Context) {
 			h.errorResponse(c, status, code, message)
 			return
 		}
+	}
+	if parsed.ResponseFormat == "" {
+		rewritten, err := sjson.SetBytes(body, "response_format", "b64_json")
+		if err != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to normalize response_format")
+			return
+		}
+		body = rewritten
+		parsed.ResponseFormat = "b64_json"
 	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, parsed.Model)

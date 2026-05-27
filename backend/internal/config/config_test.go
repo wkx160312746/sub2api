@@ -177,6 +177,31 @@ func TestLoadOpenAIImagesOmitReasoningFromEnv(t *testing.T) {
 	require.True(t, cfg.Gateway.OpenAIImagesOmitReasoning)
 }
 
+func TestLoadImageTOSConfigFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_IMAGE_TOS_ENABLED", "true")
+	t.Setenv("GATEWAY_IMAGE_TOS_ENDPOINT", "tos-cn-beijing.volces.com")
+	t.Setenv("GATEWAY_IMAGE_TOS_REGION", "cn-beijing")
+	t.Setenv("GATEWAY_IMAGE_TOS_ACCESS_KEY_ID", "ak")
+	t.Setenv("GATEWAY_IMAGE_TOS_SECRET_ACCESS_KEY", "sk")
+	t.Setenv("GATEWAY_IMAGE_TOS_PUBLIC_BASE_URL", "https://cdn.example.com")
+	t.Setenv("GATEWAY_IMAGE_TOS_PREFIX", "image2")
+	t.Setenv("GATEWAY_IMAGE_TOS_READ_LINK_EXPIRES_SECONDS", "3600")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.True(t, cfg.Gateway.ImageTOS.Enabled)
+	require.Equal(t, "tos-cn-beijing.volces.com", cfg.Gateway.ImageTOS.Endpoint)
+	require.Equal(t, "cn-beijing", cfg.Gateway.ImageTOS.Region)
+	require.Equal(t, "ak", cfg.Gateway.ImageTOS.AccessKeyID)
+	require.Equal(t, "sk", cfg.Gateway.ImageTOS.SecretAccessKey)
+	require.Equal(t, "open-api", cfg.Gateway.ImageTOS.Bucket)
+	require.Equal(t, "https://cdn.example.com", cfg.Gateway.ImageTOS.PublicBaseURL)
+	require.Equal(t, "image2", cfg.Gateway.ImageTOS.Prefix)
+	require.Equal(t, 900, cfg.Gateway.ImageTOS.UploadURLExpiresSeconds)
+	require.Equal(t, 3600, cfg.Gateway.ImageTOS.ReadLinkExpiresSeconds)
+}
+
 func TestLoadOpenAIWSStickyTTLCompatibility(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_WS_STICKY_RESPONSE_ID_TTL_SECONDS", "0")

@@ -242,6 +242,24 @@ gateway:
   # OpenAI OAuth Images 兼容路径是否省略 reasoning/include。
   # 开启后会让 Pro/OAuth 生图请求更轻量；若上游兼容性异常可关闭。
   openai_images_omit_reasoning: false
+  # image2 输出上传 Volcengine TOS 后返回 URL。默认关闭，关闭时保持 b64_json/data URL 原行为。
+  # 启用后需配置 endpoint/region/access_key_id/secret_access_key。
+  image_tos:
+    enabled: false
+    endpoint: ""
+    region: ""
+    access_key_id: ""
+    secret_access_key: ""
+    bucket: "open-api"
+    # 公共访问域名或 CDN 域名。配置后返回 public_base_url + object key。
+    # 例如: "https://cdn.example.com"
+    public_base_url: ""
+    # 对象前缀，例如 image2。可留空。
+    prefix: "image2"
+    # 兼容保留项；SDK 直传不依赖上传预签名 URL。
+    upload_url_expires_seconds: 900
+    # 未配置 public_base_url 时，用于生成 GET 预签名读取 URL；0 表示不生成。
+    read_link_expires_seconds: 0
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   openai_ws:
     # 新版 WS mode 路由（默认关闭）。关闭时保持当前 legacy 实现行为。

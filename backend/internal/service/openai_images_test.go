@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/textproto"
+	"os"
 	"strings"
 	"testing"
 
@@ -30,6 +31,70 @@ func (w *failingOpenAIImageWriter) Write(p []byte) (int, error) {
 	}
 	w.writes++
 	return w.ResponseWriter.Write(p)
+}
+
+func TestOpenAIImageTaskResultFromRecorder_PreservesBase64Response(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+	rec.Code = http.StatusOK
+	rec.Body.WriteString(`{"created":1710000007,"data":[{"b64_json":"aGVsbG8=","revised_prompt":"draw a cat"}]}`)
+
+	svc := &OpenAIImageTaskService{}
+	payload := svc.openAIImageTaskResultFromRecorder(&OpenAIImageTask{
+		ID:     "imgtask_test",
+		parsed: &OpenAIImagesRequest{ResponseFormat: "b64_json"},
+	}, rec)
+
+	require.NotNil(t, payload)
+	require.Equal(t, http.StatusOK, payload["status_code"])
+	require.NotContains(t, payload, "url")
+	require.NotContains(t, payload, "storage_key")
+
+	response, ok := payload["response"].(map[string]any)
+	require.True(t, ok)
+	data, ok := response["data"].([]any)
+	require.True(t, ok)
+	require.Len(t, data, 1)
+	item, ok := data[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "aGVsbG8=", item["b64_json"])
+	require.NotContains(t, item, "url")
+}
+
+func TestOpenAIImageTaskResultFromRecorder_URLResponseFormatStoresImageURL(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	const png1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+	rec := httptest.NewRecorder()
+	rec.Header().Set("Content-Type", "application/json")
+	rec.Code = http.StatusOK
+	rec.Body.WriteString(`{"created":1710000007,"data":[{"b64_json":"` + png1x1 + `","revised_prompt":"draw a cat"}]}`)
+
+	resultDir := t.TempDir()
+	svc := &OpenAIImageTaskService{resultDir: resultDir}
+	payload := svc.openAIImageTaskResultFromRecorder(&OpenAIImageTask{
+		ID:     "imgtask_test",
+		parsed: &OpenAIImagesRequest{ResponseFormat: "url"},
+	}, rec)
+
+	require.NotNil(t, payload)
+	require.Equal(t, "/generated/images/imgtask_test.png", payload["url"])
+	require.Equal(t, "generated/images/imgtask_test.png", payload["storage_key"])
+	require.Equal(t, "image/png", payload["mime_type"])
+	_, err := os.Stat(resultDir + "/imgtask_test.png")
+	require.NoError(t, err)
+
+	response, ok := payload["response"].(map[string]any)
+	require.True(t, ok)
+	data, ok := response["data"].([]any)
+	require.True(t, ok)
+	require.Len(t, data, 1)
+	item, ok := data[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "/generated/images/imgtask_test.png", item["url"])
+	require.NotContains(t, item, "b64_json")
 }
 
 func TestOpenAIGatewayServiceParseOpenAIImagesRequest_JSON(t *testing.T) {
