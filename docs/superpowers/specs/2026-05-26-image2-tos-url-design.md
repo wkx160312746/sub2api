@@ -1,88 +1,89 @@
-# image2 TOS URL Output Design
+# image2 TOS URL 输出设计
 
-## Context
+## 背景
 
-The image2 synchronous API path and the asynchronous image task path both ultimately use `OpenAIGatewayService.ForwardImages`. The async worker records the same HTTP response body produced by that forwarding path, so response rewriting inside the image forwarding layer can cover both sync and async behavior without changing the task storage model.
+image2 的同步接口和异步图片任务最终都会走 `OpenAIGatewayService.ForwardImages`。异步 worker 会记录这条转发链路写出的同一份 HTTP 响应体，所以只要在图片转发层做响应改写，就能同时覆盖同步返回和异步任务结果，不需要改任务存储模型。
 
-The BYTS TOS package supplied in `byts-tos-main.zip` exposes a signed business API for upload and read links:
+最终接入使用火山引擎官方 TOS Go SDK，而不是 `byts-tos-main.zip` 中的 BYTS 业务签名 API。原因是你后续明确给出了 Volcengine Go SDK 方向；TOS 独立 SDK 包为 `github.com/volcengine/ve-tos-golang-sdk/v2/tos`。
 
-- `POST /api/tos/upload-url` returns a presigned TOS `PUT` URL.
-- The gateway uploads decoded image bytes to that URL.
-- `POST /api/tos/read-link` returns the URL that should be sent back to clients.
+- 使用 SDK `PutObjectV2` 直接把解码后的图片 bytes 上传到 TOS。
+- 如果配置了 `public_base_url`，返回 `<public_base_url>/<object key>`。
+- 如果没有配置公共域名且配置了读取链接过期时间，使用 SDK `PreSignedURL` 生成 GET 预签名读取 URL。
 
-The target bucket is `open-api`.
+目标 bucket 固定为 `open-api`。
 
-## Decision
+## 决策
 
-Use the BYTS TOS signed business API, not the admin token API. The gateway will upload image2 outputs before sending the final response to clients. When TOS is configured, image responses that currently contain `b64_json` or `data:image/...;base64,...` will be rewritten to URL responses backed by TOS. When TOS is not configured, existing behavior remains unchanged.
+使用 Volcengine TOS SDK 直连 TOS。网关会在 image2 结果写回客户端之前，把图片输出上传到 TOS。启用并配置 TOS 后，原本包含 `b64_json` 或 `data:image/...;base64,...` 的图片响应会被改写成 TOS URL 响应；未配置 TOS 时保持现有行为不变。
 
-## Configuration
+## 配置
 
-Add a small TOS image storage config section under gateway configuration, with environment overrides following the existing config loader conventions:
+在 `gateway` 配置下新增一组图片 TOS 存储配置，并按项目现有配置加载方式支持 env 覆盖：
 
 - `gateway.image_tos.enabled`
-- `gateway.image_tos.base_url`
-- `gateway.image_tos.client_id`
-- `gateway.image_tos.sm2_private_key`
-- `gateway.image_tos.bucket`, default `open-api`
-- `gateway.image_tos.prefix`, optional object prefix
-- `gateway.image_tos.upload_url_expires_seconds`, default `900`
-- `gateway.image_tos.read_link_expires_seconds`, optional; when absent, request a public read link
+- `gateway.image_tos.endpoint`
+- `gateway.image_tos.region`
+- `gateway.image_tos.access_key_id`
+- `gateway.image_tos.secret_access_key`
+- `gateway.image_tos.bucket`，默认 `open-api`
+- `gateway.image_tos.public_base_url`，可选公共访问域名或 CDN 域名
+- `gateway.image_tos.prefix`，可选对象前缀
+- `gateway.image_tos.upload_url_expires_seconds`，保留兼容配置，默认 `900`
+- `gateway.image_tos.read_link_expires_seconds`，可选；未配置 `public_base_url` 时用于生成 GET 预签名 URL
 
-The feature is active only when enabled and the required connection fields are present.
+只有在 `enabled=true` 且必需连接参数齐全时，这个功能才生效。
 
-## Architecture
+## 架构
 
-Introduce a focused service helper, `TOSImageStorage`, owned by the OpenAI image forwarding layer. Its responsibilities are:
+新增一个边界清楚的服务辅助模块 `TOSImageStorage`，由 OpenAI 图片转发层持有。它只负责 TOS 存储相关工作：
 
-- Sign BYTS TOS JSON requests with SM2/SM3 according to the zip documentation.
-- Ask TOS for a presigned upload URL.
-- Upload decoded image bytes with `PUT`.
-- Ask TOS for the read link.
-- Return the final URL plus bucket/key metadata for logging or tests.
+- 使用 endpoint、region、AK/SK 初始化 Volcengine TOS SDK client。
+- 调用 `PutObjectV2` 上传解码后的图片 bytes。
+- 按配置返回公共 URL 或 SDK GET 预签名 URL。
+- 返回最终 URL，以及 bucket/key 等可用于日志和测试的元数据。
 
-The helper should not know about OpenAI response formats. OpenAI response rewriting stays near the existing image response handlers, where the code already understands `b64_json`, data URLs, streaming completion events, and OAuth Responses-derived payloads.
+这个辅助模块不理解 OpenAI 响应格式。OpenAI 响应改写逻辑留在现有图片响应处理附近，因为那里已经处理 `b64_json`、data URL、流式完成事件，以及 OAuth Responses 转换后的图片载荷。
 
-## Data Flow
+## 数据流
 
-For non-streaming image responses:
+非流式图片响应：
 
-1. Read the upstream response body as today.
-2. Detect image payloads in `data[].b64_json` and `data[].url` values that are data URLs.
-3. Upload each image to TOS.
-4. Replace each item with `url: <tosReadUrl>` and remove `b64_json`.
-5. Write the rewritten JSON response.
+1. 像现在一样读取上游响应体。
+2. 检测 `data[].b64_json`，以及 `data[].url` 中的 data URL。
+3. 逐张图片上传到 TOS。
+4. 把每个图片 item 改成 `url: <tosReadUrl>`，并移除 `b64_json`。
+5. 写出改写后的 JSON 响应。
 
-For OAuth Responses image conversion:
+OAuth Responses 图片转换：
 
-1. Convert upstream Responses output into OpenAI Images API response data as today.
-2. Before writing the response, run the same JSON rewrite helper.
-3. Async image tasks automatically persist the rewritten response because they use the same recorder output.
+1. 像现在一样把上游 Responses 输出转换成 OpenAI Images API 响应。
+2. 写出响应前，复用同一个 JSON 改写 helper。
+3. 异步图片任务会自动持久化改写后的响应，因为它记录的是同一条转发链路的 recorder 输出。
 
-For streaming image responses:
+流式图片响应：
 
-1. Leave partial image events unchanged so clients can still show progress.
-2. For final completed image events, upload the final image payload before emitting the completed event.
-3. Emit completed payloads with `url` instead of base64 image data.
+1. partial image 事件保持不变，客户端仍然可以展示生成进度。
+2. final completed 图片事件在发送前上传最终图片。
+3. completed payload 使用 `url` 返回，不再返回 base64 图片数据。
 
-## Error Handling
+## 错误处理
 
-If TOS is disabled or incomplete, do not change image output behavior.
+如果 TOS 未启用或配置不完整，图片输出保持现状。
 
-If TOS is enabled and an upload or read-link step fails, fail the image request rather than returning base64. This keeps the configured contract clear: once enabled, successful image2 responses contain usable TOS URLs.
+如果 TOS 已启用，但上传或读取链接生成失败，本次 image 请求失败，不回退返回 base64。这样启用后的契约更清楚：成功的 image2 响应一定包含可用的 TOS URL。如果既没有配置公共访问域名，也没有配置 `read_link_expires_seconds`，则视为 TOS 读取 URL 配置不完整。
 
-Errors should be sanitized in client responses and include enough server-side log context to identify the TOS step, bucket, and generated object key when available.
+返回给客户端的错误信息需要做脱敏；服务端日志保留足够上下文，用于定位失败发生在 TOS 的哪个步骤、哪个 bucket，以及已生成的对象 key。
 
-## Testing
+## 测试
 
-Add unit tests around the response rewrite helper and TOS client using `httptest`:
+围绕响应改写 helper 和 TOS client 增加单元测试：
 
-- Signed requests include the required BYTS headers and use bucket `open-api`.
-- A `b64_json` image is uploaded and rewritten to `url`.
-- A data URL in `url` is uploaded and rewritten to a normal URL.
-- Existing URL responses are left unchanged.
-- TOS disabled leaves responses unchanged.
-- TOS enabled with upload failure returns an error.
-- Async task result handling is covered by a focused test or by verifying the shared forwarding response helper is used before recorder output is captured.
+- SDK client 初始化使用 bucket `open-api`、endpoint、region、AK/SK。
+- `b64_json` 图片会上传并改写为 `url`。
+- `url` 字段里的 data URL 会上传并改写为普通 URL。
+- 已经是普通 URL 的响应保持不变。
+- TOS 未启用时响应保持不变。
+- TOS 启用后上传失败会返回错误。
+- 异步任务结果通过共享转发响应 helper 覆盖，或补一个聚焦测试确认 recorder 捕获前已经完成改写。
 
-Run targeted Go tests for the OpenAI image service package, then broader handler/service tests if the edits touch shared config or forwarding behavior.
+验证时先跑 OpenAI 图片 service 包的定向 Go 测试；如果改动触及共享配置或转发行为，再跑更广的 handler/service 测试。
