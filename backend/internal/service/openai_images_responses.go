@@ -935,7 +935,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthNonStreamingResponse(
 		return OpenAIUsage{}, 0, nil, err
 	}
 	if rewritten, rewriteErr := s.rewriteOpenAIImagesResponseWithTOS(c.Request.Context(), responseBody, responseFormat); rewriteErr != nil {
-		return OpenAIUsage{}, 0, rewriteErr
+		return OpenAIUsage{}, 0, nil, rewriteErr
 	} else {
 		responseBody = rewritten
 	}
