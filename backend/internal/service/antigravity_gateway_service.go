@@ -90,6 +90,10 @@ const (
 	antigravityFallbackSecondsEnv = "GATEWAY_ANTIGRAVITY_FALLBACK_COOLDOWN_SECONDS"
 )
 
+const antigravityProjectIDFallbackCredentialKey = "antigravity_project_id"
+
+var errAntigravityProjectIDRequired = errors.New("该 standard-tier Antigravity 账号需配置 project_id")
+
 // AntigravityAccountSwitchError 账号切换信号
 // 当账号限流时间超过阈值时，通知上层切换账号
 type AntigravityAccountSwitchError struct {
@@ -1029,6 +1033,22 @@ func (s *AntigravityGatewayService) getMappedModel(account *Account, requestedMo
 	return mapAntigravityModel(account, requestedModel)
 }
 
+func resolveAntigravityProjectID(account *Account) (string, error) {
+	if account == nil {
+		return "", errAntigravityProjectIDRequired
+	}
+	if projectID := strings.TrimSpace(account.GetCredential("project_id")); projectID != "" {
+		return projectID, nil
+	}
+	if projectID := strings.TrimSpace(account.GetCredential(antigravityProjectIDFallbackCredentialKey)); projectID != "" {
+		return projectID, nil
+	}
+	if projectID := strings.TrimSpace(account.GetExtraString(antigravityProjectIDFallbackCredentialKey)); projectID != "" {
+		return projectID, nil
+	}
+	return "", errAntigravityProjectIDRequired
+}
+
 // applyThinkingModelSuffix 根据 thinking 配置调整模型名
 // 当映射结果是 claude-sonnet-4-5 且请求开启了 thinking 时，改为 claude-sonnet-4-5-thinking
 func applyThinkingModelSuffix(mappedModel string, thinkingEnabled bool) string {
@@ -1068,8 +1088,10 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 		return nil, fmt.Errorf("获取 access_token 失败: %w", err)
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
+	projectID, err := resolveAntigravityProjectID(account)
+	if err != nil {
+		return nil, err
+	}
 
 	// 模型映射
 	mappedModel := s.getMappedModel(account, modelID)
@@ -1326,6 +1348,10 @@ func (s *AntigravityGatewayService) wrapV1InternalRequest(projectID, model strin
 	if err := json.Unmarshal(originalBody, &request); err != nil {
 		return nil, fmt.Errorf("解析请求体失败: %w", err)
 	}
+	projectID = strings.TrimSpace(projectID)
+	if projectID == "" {
+		return nil, errAntigravityProjectIDRequired
+	}
 
 	wrapped := map[string]any{
 		"project":     projectID,
@@ -1403,8 +1429,11 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		}
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
+	projectID, err := resolveAntigravityProjectID(account)
+	if err != nil {
+		_ = s.writeClaudeError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 
 	// 代理 URL
 	proxyURL := ""
@@ -2171,8 +2200,11 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		}
 	}
 
-	// 获取 project_id（部分账户类型可能没有）
-	projectID := strings.TrimSpace(account.GetCredential("project_id"))
+	projectID, err := resolveAntigravityProjectID(account)
+	if err != nil {
+		_ = s.writeGoogleError(c, http.StatusBadRequest, err.Error())
+		return nil, err
+	}
 
 	// 代理 URL
 	proxyURL := ""
@@ -2447,6 +2479,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			Detail:             upstreamDetail,
 		})
 		logger.LegacyPrintf("service.antigravity_gateway", "[antigravity-Forward] upstream error status=%d body=%s", resp.StatusCode, truncateForLog(unwrappedForOps, 500))
+		MarkResponseCommitted(c)
 		c.Data(resp.StatusCode, contentType, unwrappedForOps)
 		return nil, fmt.Errorf("antigravity upstream error: %d", resp.StatusCode)
 	}
@@ -3644,6 +3677,7 @@ func mergeTextPartsToResponse(response map[string]any, textParts []string) map[s
 }
 
 func (s *AntigravityGatewayService) writeClaudeError(c *gin.Context, status int, errType, message string) error {
+	MarkResponseCommitted(c)
 	c.JSON(status, gin.H{
 		"type":  "error",
 		"error": gin.H{"type": errType, "message": message},
@@ -3657,6 +3691,7 @@ func (s *AntigravityGatewayService) WriteMappedClaudeError(c *gin.Context, accou
 }
 
 func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, account *Account, upstreamStatus int, upstreamRequestID string, body []byte) error {
+	MarkResponseCommitted(c)
 	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(body))
 	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 	logBody, maxBytes := s.getLogConfig()
@@ -3734,6 +3769,7 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 }
 
 func (s *AntigravityGatewayService) writeGoogleError(c *gin.Context, status int, message string) error {
+	MarkResponseCommitted(c)
 	statusStr := "UNKNOWN"
 	switch status {
 	case 400:

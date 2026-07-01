@@ -93,6 +93,9 @@ func (m *sessionWindowMockRepo) ListByGroup(context.Context, int64) ([]Account, 
 func (m *sessionWindowMockRepo) ListActive(context.Context) ([]Account, error) {
 	panic("unexpected")
 }
+func (m *sessionWindowMockRepo) ListOAuthRefreshCandidates(context.Context) ([]Account, error) {
+	panic("unexpected")
+}
 func (m *sessionWindowMockRepo) ListByPlatform(context.Context, string) ([]Account, error) {
 	panic("unexpected")
 }
@@ -157,6 +160,9 @@ func (m *sessionWindowMockRepo) IncrementQuotaUsed(context.Context, int64, float
 }
 func (m *sessionWindowMockRepo) ResetQuotaUsed(context.Context, int64) error { panic("unexpected") }
 func (m *sessionWindowMockRepo) RevertProxyFallback(context.Context, int64) error {
+	panic("unexpected")
+}
+func (m *sessionWindowMockRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
 	panic("unexpected")
 }
 
