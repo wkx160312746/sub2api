@@ -474,11 +474,11 @@ func (s *OpenAIImageTaskService) forwardTaskWithFailover(c *gin.Context, task *O
 		account := selection.Account
 		result, err := s.gateway.ForwardImages(context.Background(), c, account, task.RequestBody, task.parsed, task.ChannelMappedModel)
 		if err == nil {
-			s.gateway.ReportOpenAIAccountScheduleResult(account.ID, task.parsed.Model, true, result.FirstTokenMs)
+			s.gateway.ReportOpenAIAccountScheduleResult(account, task.parsed.Model, true, result.FirstTokenMs)
 			return account, result, nil
 		}
 		lastForwardErr = openAIImageTaskPreserveForwardError(err)
-		s.gateway.ReportOpenAIAccountScheduleResult(account.ID, task.parsed.Model, false, nil)
+		s.gateway.ReportOpenAIAccountScheduleResult(account, task.parsed.Model, false, nil)
 		if failedAccountIDs == nil {
 			failedAccountIDs = make(map[int64]struct{})
 		}
